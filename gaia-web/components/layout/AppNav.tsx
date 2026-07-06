@@ -10,6 +10,7 @@ const NAV_ITEMS = [
   { href: "/temperature-tracking", label: "Temperature Tracking" },
   { href: "/tact-time", label: "Tact Time" },
   { href: "/error-analysis", label: "Error Analysis" },
+  { href: "/mini-jmp", label: "mini-JMP" },
 ];
 
 export function AppNav() {
