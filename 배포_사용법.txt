@@ -1,0 +1,15 @@
+■ 고객 PC에 아무것도 설치 없이 사용하는 방법
+
+[배포할 파일 3개]
+  1. ExtractGRRColumns.bat   (실행용 - 이것만 더블클릭)
+  2. ExtractGRRColumns.ps1  (실제 동작 스크립트)
+  3. GaiaStat2grrConfig.csv  (설정 파일)
+
+[고객 사용 방법]
+  1. 위 3개 파일 + 테스트 로그 CSV를 같은 폴더에 넣기
+  2. ExtractGRRColumns.bat 더블클릭
+  3. 같은 폴더에 "[로그파일이름]_grr_only.csv" 생성됨
+
+- Python, pip, PyInstaller 등 설치할 것 없음
+- Windows에 기본 들어 있는 PowerShell만 사용
+- 폴더에 CSV가 2개(Config + 로그)뿐이면 로그는 자동 선택

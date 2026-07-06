@@ -1,0 +1,20 @@
+■ extract_grr_columns.py 사용법
+
+1) 폴더에 다음 두 CSV가 있어야 합니다.
+   - GaiaStat2grrConfig.csv  (A열에 추출할 헤더 이름)
+   - 테스트 로그.csv
+
+2) 실행 방법 (같은 폴더에서)
+   - 로그 파일 자동 선택 (폴더에 CSV가 2개일 때 용량 큰 쪽을 로그로 사용):
+     python extract_grr_columns.py
+
+   - 로그 파일 직접 지정:
+     python extract_grr_columns.py "테스트로그파일명.csv"
+
+   - 출력 파일까지 지정:
+     python extract_grr_columns.py "테스트로그파일명.csv" "출력파일명.csv"
+
+3) 결과
+   - 출력 파일: [로그파일이름]_grr_only.csv (또는 지정한 이름)
+   - GaiaStat2grrConfig의 A열에 있는 헤더에 해당하는 컬럼만 포함됩니다.
+   - 200MB 이상도 메모리 스트리밍으로 처리하므로 안정적으로 동작합니다.
