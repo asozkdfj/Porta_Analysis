@@ -9,8 +9,18 @@ import {
   type MiniJmpChartOptions,
   type MiniJmpColumn,
   type MiniJmpFilter,
+  type MiniJmpFilterOperator,
   type MiniJmpGraphType,
 } from "@/lib/mini-jmp-types";
+
+const FILTER_OPS: { value: MiniJmpFilterOperator; label: string }[] = [
+  { value: "equals", label: "=" },
+  { value: "contains", label: "contains" },
+  { value: "notContains", label: "not contains" },
+  { value: "gte", label: "≥" },
+  { value: "lte", label: "≤" },
+  { value: "between", label: "between" },
+];
 
 interface OptionPanelProps {
   graphType: MiniJmpGraphType;
@@ -29,8 +39,13 @@ interface OptionPanelProps {
   ) => void;
   onAssign: (zone: "x" | "y" | "color" | "group", name: string) => void;
   onClear?: (zone: "x" | "y" | "color" | "group") => void;
-  filterDraft: { column: string; value: string };
-  onFilterDraftChange: (draft: { column: string; value: string }) => void;
+  filterDraft: {
+    column: string;
+    operator: MiniJmpFilterOperator;
+    value: string;
+    value2: string;
+  };
+  onFilterDraftChange: (draft: OptionPanelProps["filterDraft"]) => void;
   filterValueOptions: string[];
   filters: MiniJmpFilter[];
   onAddFilter: () => void;
@@ -265,25 +280,89 @@ export function OptionPanel({
         </div>
 
         <div className="space-y-2 pt-1 border-t border-slate-700">
-          <p className="text-[10px] uppercase tracking-wide text-slate-500">Filter</p>
+          <p className="text-[10px] uppercase tracking-wide text-slate-500">Local Data Filter</p>
           <ScrollableColumnSelect
             label="Column"
             value={filterDraft.column}
-            columns={stringColumns}
-            onChange={(v) => onFilterDraftChange({ column: v, value: "" })}
-            onClear={() => onFilterDraftChange({ column: "", value: "" })}
-          />
-          <SelectRow
-            label="Value"
-            value={filterDraft.value}
-            options={[
-              { value: "", label: "—" },
-              ...filterValueOptions.map((v) => ({ value: v, label: v })),
-            ]}
+            columns={columns}
             onChange={(v) =>
-              onFilterDraftChange({ ...filterDraft, value: v })
+              onFilterDraftChange({ ...filterDraft, column: v, value: "", value2: "" })
+            }
+            onClear={() =>
+              onFilterDraftChange({
+                column: "",
+                operator: "equals",
+                value: "",
+                value2: "",
+              })
             }
           />
+          <SelectRow
+            label="Operator"
+            value={filterDraft.operator}
+            options={FILTER_OPS.map((o) => ({ value: o.value, label: o.label }))}
+            onChange={(v) =>
+              onFilterDraftChange({
+                ...filterDraft,
+                operator: v as MiniJmpFilterOperator,
+              })
+            }
+          />
+          {filterDraft.operator === "between" ? (
+            <div className="grid grid-cols-2 gap-2">
+              <input
+                type="number"
+                step="any"
+                placeholder="Min"
+                value={filterDraft.value}
+                onChange={(e) =>
+                  onFilterDraftChange({ ...filterDraft, value: e.target.value })
+                }
+                className="rounded border border-slate-600 bg-slate-800 px-2 py-1 text-xs text-slate-100"
+              />
+              <input
+                type="number"
+                step="any"
+                placeholder="Max"
+                value={filterDraft.value2}
+                onChange={(e) =>
+                  onFilterDraftChange({ ...filterDraft, value2: e.target.value })
+                }
+                className="rounded border border-slate-600 bg-slate-800 px-2 py-1 text-xs text-slate-100"
+              />
+            </div>
+          ) : ["gte", "lte"].includes(filterDraft.operator) ? (
+            <input
+              type="number"
+              step="any"
+              placeholder="Value"
+              value={filterDraft.value}
+              onChange={(e) =>
+                onFilterDraftChange({ ...filterDraft, value: e.target.value })
+              }
+              className="w-full rounded border border-slate-600 bg-slate-800 px-2 py-1 text-xs text-slate-100"
+            />
+          ) : ["contains", "notContains"].includes(filterDraft.operator) ? (
+            <input
+              type="text"
+              placeholder="Search text"
+              value={filterDraft.value}
+              onChange={(e) =>
+                onFilterDraftChange({ ...filterDraft, value: e.target.value })
+              }
+              className="w-full rounded border border-slate-600 bg-slate-800 px-2 py-1 text-xs text-slate-100"
+            />
+          ) : (
+            <SelectRow
+              label="Value"
+              value={filterDraft.value}
+              options={[
+                { value: "", label: "—" },
+                ...filterValueOptions.map((v) => ({ value: v, label: v })),
+              ]}
+              onChange={(v) => onFilterDraftChange({ ...filterDraft, value: v })}
+            />
+          )}
           <div className="flex gap-2">
             <button
               type="button"
@@ -308,7 +387,10 @@ export function OptionPanel({
                   className="flex items-center justify-between rounded bg-slate-800 px-2 py-1 text-[10px] font-mono text-slate-300"
                 >
                   <span className="truncate">
-                    {f.column} = {f.value}
+                    {f.column} {f.operator ?? "equals"}{" "}
+                    {f.operator === "between"
+                      ? `${f.value}–${f.value2 ?? ""}`
+                      : f.value}
                   </span>
                   <button
                     type="button"

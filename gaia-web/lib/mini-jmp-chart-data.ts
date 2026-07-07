@@ -4,6 +4,7 @@ import {
   getNumericValue,
   getXNumeric,
 } from "./mini-jmp-parser";
+import { rowMatchesFilter } from "./mini-jmp-fit";
 import type {
   MiniJmpAggregation,
   MiniJmpBoxPlotGroup,
@@ -11,19 +12,31 @@ import type {
   MiniJmpColumn,
   MiniJmpFilter,
   MiniJmpGraphType,
+  MiniJmpHeatmapCell,
   MiniJmpHistogramBin,
+  MiniJmpParetoPoint,
   MiniJmpPointsMode,
   MiniJmpScatterPoint,
 } from "./mini-jmp-types";
+import {
+  downsamplePoints,
+  MAX_LINE_POINTS,
+  MAX_SCATTER_POINTS,
+} from "./mini-jmp-perf";
+
+export function filterRows(
+  rows: Record<string, string>[],
+  filters: MiniJmpFilter[]
+): Record<string, string>[] {
+  return applyFilters(rows, filters);
+}
 
 function applyFilters(
   rows: Record<string, string>[],
   filters: MiniJmpFilter[]
 ): Record<string, string>[] {
   if (filters.length === 0) return rows;
-  return rows.filter((row) =>
-    filters.every((f) => getCellValue(row, f.column) === f.value)
-  );
+  return rows.filter((row) => filters.every((f) => rowMatchesFilter(row, f)));
 }
 
 function aggregateValues(
@@ -56,11 +69,6 @@ function quantile(sorted: number[], q: number): number {
     return sorted[base]! + rest * (sorted[base + 1]! - sorted[base]!);
   }
   return sorted[base]!;
-}
-
-function jitterOffset(seed: number, spread: number): number {
-  const h = Math.sin(seed * 127.1 + 311.7) * 43758.5453123;
-  return (h - Math.floor(h) - 0.5) * spread;
 }
 
 export function uniqueOrderedCategories(
@@ -104,7 +112,158 @@ export function sortColorKeys(
 }
 
 function columnIsCategoryAxis(col: MiniJmpColumn): boolean {
-  return col.kind === "string";
+  return col.kind === "string" || col.kind === "boolean";
+}
+
+function pickPointExtras(
+  row: Record<string, string>,
+  input: {
+    colorColumn?: string | null;
+    groupColumn?: string | null;
+    labelColumn?: string | null;
+    sizeColumn?: string | null;
+  }
+): Pick<MiniJmpScatterPoint, "color" | "group" | "label" | "size"> {
+  const color = input.colorColumn
+    ? getCellValue(row, input.colorColumn) || undefined
+    : undefined;
+  const group = input.groupColumn
+    ? getCellValue(row, input.groupColumn) || undefined
+    : undefined;
+  const label = input.labelColumn
+    ? getCellValue(row, input.labelColumn) || undefined
+    : undefined;
+  const rawSize = input.sizeColumn
+    ? getNumericValue(row, input.sizeColumn)
+    : null;
+  return {
+    color,
+    group,
+    label,
+    size: rawSize != null ? rawSize : undefined,
+  };
+}
+
+function normalizePointSizes(points: MiniJmpScatterPoint[]): MiniJmpScatterPoint[] {
+  const sizes = points.map((p) => p.size).filter((s): s is number => s != null);
+  if (sizes.length === 0) return points;
+  const min = Math.min(...sizes);
+  const max = Math.max(...sizes);
+  const span = max - min || 1;
+  return points.map((p) => ({
+    ...p,
+    size:
+      p.size == null
+        ? undefined
+        : 0.4 + ((p.size - min) / span) * 1.2,
+  }));
+}
+
+export function buildParetoData(input: {
+  rows: Record<string, string>[];
+  column: string;
+  filters?: MiniJmpFilter[];
+  limit?: number;
+}): MiniJmpParetoPoint[] {
+  const filtered = input.filters?.length
+    ? applyFilters(input.rows, input.filters)
+    : input.rows;
+  const counts = new Map<string, number>();
+  for (const row of filtered) {
+    const v = getCellValue(row, input.column) || "(empty)";
+    counts.set(v, (counts.get(v) ?? 0) + 1);
+  }
+  const sorted = [...counts.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, input.limit ?? 40);
+  const total = sorted.reduce((s, [, c]) => s + c, 0) || 1;
+  let cum = 0;
+  return sorted.map(([category, count]) => {
+    cum += count;
+    return {
+      category,
+      count,
+      cumulativePct: Math.round((cum / total) * 1000) / 10,
+    };
+  });
+}
+
+export function buildHeatmapData(input: {
+  rows: Record<string, string>[];
+  xColumn: string;
+  yColumn: string;
+  valueColumn?: string | null;
+  aggregation?: MiniJmpAggregation;
+  filters?: MiniJmpFilter[];
+}): {
+  cells: MiniJmpHeatmapCell[];
+  xCategories: string[];
+  yCategories: string[];
+  maxValue: number;
+} {
+  const filtered = input.filters?.length
+    ? applyFilters(input.rows, input.filters)
+    : input.rows;
+  const xCats = uniqueOrderedCategories(filtered, input.xColumn);
+  const yCats = uniqueOrderedCategories(filtered, input.yColumn);
+  const agg = input.aggregation ?? "count";
+  const bucket = new Map<string, number[]>();
+
+  for (const row of filtered) {
+    const x = getCellValue(row, input.xColumn) || "(empty)";
+    const y = getCellValue(row, input.yColumn) || "(empty)";
+    const key = `${x}\0${y}`;
+    if (!input.valueColumn) {
+      bucket.set(key, [...(bucket.get(key) ?? []), 1]);
+    } else {
+      const v = getNumericValue(row, input.valueColumn);
+      if (v != null) bucket.set(key, [...(bucket.get(key) ?? []), v]);
+    }
+  }
+
+  const cells: MiniJmpHeatmapCell[] = [];
+  let maxValue = 0;
+
+  yCats.forEach((y, yi) => {
+    xCats.forEach((x, xi) => {
+      const vals = bucket.get(`${x}\0${y}`) ?? [];
+      let value = 0;
+      if (!input.valueColumn || agg === "count") {
+        value = vals.length;
+      } else if (vals.length > 0) {
+        value = aggregateValues(vals, agg);
+      }
+      maxValue = Math.max(maxValue, value);
+      cells.push({ x, y, value, xIndex: xi, yIndex: yi });
+    });
+  });
+
+  return { cells, xCategories: xCats, yCategories: yCats, maxValue };
+}
+
+export function computeLinearTrend(
+  points: { x: number; y: number }[]
+): { x: number; y: number }[] | null {
+  const pts = points.filter(
+    (p) => Number.isFinite(p.x) && Number.isFinite(p.y)
+  );
+  if (pts.length < 2) return null;
+  const n = pts.length;
+  const sumX = pts.reduce((s, p) => s + p.x, 0);
+  const sumY = pts.reduce((s, p) => s + p.y, 0);
+  const sumXY = pts.reduce((s, p) => s + p.x * p.y, 0);
+  const sumXX = pts.reduce((s, p) => s + p.x * p.x, 0);
+  const denom = n * sumXX - sumX * sumX;
+  if (Math.abs(denom) < 1e-12) return null;
+  const slope = (n * sumXY - sumX * sumY) / denom;
+  const intercept = (sumY - slope * sumX) / n;
+  const xs = pts.map((p) => p.x);
+  const xMin = Math.min(...xs);
+  const xMax = Math.max(...xs);
+  return [
+    { x: xMin, y: slope * xMin + intercept },
+    { x: xMax, y: slope * xMax + intercept },
+  ];
 }
 
 export function buildPointsPlotData(input: {
@@ -112,43 +271,50 @@ export function buildPointsPlotData(input: {
   xColumn: string;
   yColumn: string | null;
   colorColumn: string | null;
+  groupColumn?: string | null;
+  labelColumn?: string | null;
+  sizeColumn?: string | null;
   xCol: MiniJmpColumn;
   yCol: MiniJmpColumn | null;
-  filters: MiniJmpFilter[];
-  jitter?: number;
+  filters?: MiniJmpFilter[];
+  maxPoints?: number;
 }): {
   mode: MiniJmpPointsMode;
   points: MiniJmpScatterPoint[];
   xCategories: string[];
   yCategories: string[];
+  pointTotal: number;
 } {
-  const filtered = applyFilters(input.rows, input.filters);
-  const jitterStrength = input.jitter ?? 0.45;
-
-  const pickColor = (row: Record<string, string>) =>
-    input.colorColumn
-      ? getCellValue(row, input.colorColumn) || undefined
-      : undefined;
+  const filtered = input.filters?.length
+    ? applyFilters(input.rows, input.filters)
+    : input.rows;
+  const maxPoints = input.maxPoints ?? MAX_SCATTER_POINTS;
+  const extras = {
+    colorColumn: input.colorColumn,
+    groupColumn: input.groupColumn,
+    labelColumn: input.labelColumn,
+    sizeColumn: input.sizeColumn,
+  };
 
   const xCats = uniqueOrderedCategories(filtered, input.xColumn);
   const xIndex = new Map(xCats.map((c, i) => [c, i]));
-  const xSpread =
-    Math.min(0.42, 0.9 / Math.max(xCats.length, 1)) * jitterStrength;
 
   if (!input.yColumn || !input.yCol) {
-    const points: MiniJmpScatterPoint[] = [];
+    const raw: MiniJmpScatterPoint[] = [];
     filtered.forEach((row, i) => {
       const rawX = getCellValue(row, input.xColumn) || "(empty)";
       const xi = xIndex.get(rawX) ?? 0;
-      points.push({
-        x: xi + jitterOffset(i, xSpread),
-        y: 0.5 + jitterOffset(i + 1000, 0.38 * jitterStrength),
+      raw.push({
+        x: xi,
+        y: 0.5,
+        i,
         rawX,
         rawY: "",
-        color: pickColor(row),
+        ...pickPointExtras(row, extras),
       });
     });
-    return { mode: "x-only", points, xCategories: xCats, yCategories: [] };
+    const { items, total } = downsamplePoints(normalizePointSizes(raw), maxPoints);
+    return { mode: "x-only", points: items, xCategories: xCats, yCategories: [], pointTotal: total };
   }
 
   const yCol = input.yCol;
@@ -156,25 +322,31 @@ export function buildPointsPlotData(input: {
   const xIsCategory = columnIsCategoryAxis(input.xCol);
   const yIsCategory = columnIsCategoryAxis(yCol);
 
-  // JMP: X=범주, Y=숫자 → X축 하단(범주), Y축 좌측(숫자)
   if (yNumeric && !yIsCategory && xIsCategory) {
-    const yJitter = 0.015 * jitterStrength;
-    const points: MiniJmpScatterPoint[] = [];
+    const raw: MiniJmpScatterPoint[] = [];
     filtered.forEach((row, i) => {
       const rawX = getCellValue(row, input.xColumn) || "(empty)";
       const rawY = getCellValue(row, input.yColumn!) || "";
       const y = getNumericValue(row, input.yColumn!);
       if (y == null) return;
       const xi = xIndex.get(rawX) ?? 0;
-      points.push({
-        x: xi + jitterOffset(i, xSpread),
-        y: y + jitterOffset(i + 500, yJitter * Math.max(Math.abs(y), 1)),
+      raw.push({
+        x: xi,
+        y,
+        i,
         rawX,
         rawY,
-        color: pickColor(row),
+        ...pickPointExtras(row, extras),
       });
     });
-    return { mode: "cat-numeric", points, xCategories: xCats, yCategories: [] };
+    const { items, total } = downsamplePoints(normalizePointSizes(raw), maxPoints);
+    return {
+      mode: "cat-numeric",
+      points: items,
+      xCategories: xCats,
+      yCategories: [],
+      pointTotal: total,
+    };
   }
 
   const xNumeric =
@@ -182,28 +354,32 @@ export function buildPointsPlotData(input: {
     (input.xCol.kind === "datetime" && !xIsCategory);
 
   if (yNumeric && (xNumeric || input.xCol.kind === "datetime") && !yIsCategory) {
+    const pts = buildScatterLineData({
+      rows: input.rows,
+      xColumn: input.xColumn,
+      yColumn: input.yColumn,
+      colorColumn: input.colorColumn,
+      groupColumn: input.groupColumn,
+      labelColumn: input.labelColumn,
+      sizeColumn: input.sizeColumn,
+      xCol: input.xCol,
+      yCol: input.yCol,
+      filters: input.filters ?? [],
+      maxPoints,
+    });
     return {
       mode: "numeric",
-      points: buildScatterLineData({
-        rows: input.rows,
-        xColumn: input.xColumn,
-        yColumn: input.yColumn,
-        colorColumn: input.colorColumn,
-        xCol: input.xCol,
-        yCol: input.yCol,
-        filters: input.filters,
-      }),
+      points: pts.points,
       xCategories: [],
       yCategories: [],
+      pointTotal: pts.total,
     };
   }
 
   const yCats = uniqueOrderedCategories(filtered, input.yColumn);
   const yIndex = new Map(yCats.map((c, i) => [c, i]));
-  const ySpread =
-    Math.min(0.42, 0.9 / Math.max(yCats.length, 1)) * jitterStrength;
 
-  const points: MiniJmpScatterPoint[] = [];
+  const raw: MiniJmpScatterPoint[] = [];
   filtered.forEach((row, i) => {
     const rawX = getCellValue(row, input.xColumn) || "(empty)";
     const rawY = getCellValue(row, input.yColumn!) || "(empty)";
@@ -214,32 +390,33 @@ export function buildPointsPlotData(input: {
         getXNumeric(row, input.xColumn, input.xCol.kind, i + 1) ??
         (xIndex.get(rawX) ?? 0);
     } else {
-      const xi = xIndex.get(rawX) ?? 0;
-      x = xi + jitterOffset(i, xSpread);
+      x = xIndex.get(rawX) ?? 0;
     }
 
     let y: number;
     if (yNumeric && !columnIsCategoryAxis(yCol)) {
       y = getNumericValue(row, input.yColumn!) ?? 0;
     } else {
-      const yi = yIndex.get(rawY) ?? 0;
-      y = yi + jitterOffset(i + 500, ySpread);
+      y = yIndex.get(rawY) ?? 0;
     }
 
-    points.push({
+    raw.push({
       x,
       y,
+      i,
       rawX,
       rawY,
-      color: pickColor(row),
+      ...pickPointExtras(row, extras),
     });
   });
 
+  const { items, total } = downsamplePoints(normalizePointSizes(raw), maxPoints);
   return {
     mode: "categorical",
-    points,
+    points: items,
     xCategories: xCats,
     yCategories: yCats,
+    pointTotal: total,
   };
 }
 
@@ -248,12 +425,24 @@ export function buildScatterLineData(input: {
   xColumn: string;
   yColumn: string;
   colorColumn: string | null;
+  groupColumn?: string | null;
+  labelColumn?: string | null;
+  sizeColumn?: string | null;
   xCol: MiniJmpColumn;
   yCol: MiniJmpColumn;
-  filters: MiniJmpFilter[];
-}): MiniJmpScatterPoint[] {
-  const filtered = applyFilters(input.rows, input.filters);
+  filters?: MiniJmpFilter[];
+  maxPoints?: number;
+}): { points: MiniJmpScatterPoint[]; total: number } {
+  const filtered = input.filters?.length
+    ? applyFilters(input.rows, input.filters)
+    : input.rows;
   const points: MiniJmpScatterPoint[] = [];
+  const extras = {
+    colorColumn: input.colorColumn,
+    groupColumn: input.groupColumn,
+    labelColumn: input.labelColumn,
+    sizeColumn: input.sizeColumn,
+  };
 
   filtered.forEach((row, i) => {
     const y = getNumericValue(row, input.yColumn);
@@ -266,20 +455,21 @@ export function buildScatterLineData(input: {
         : getNumericValue(row, input.xColumn));
     if (x == null || !Number.isFinite(x)) return;
 
-    const color = input.colorColumn
-      ? getCellValue(row, input.colorColumn) || undefined
-      : undefined;
-
     points.push({
       x,
       y,
-      color,
+      i,
       rawX: getCellValue(row, input.xColumn),
       rawY: getCellValue(row, input.yColumn),
+      ...pickPointExtras(row, extras),
     });
   });
 
-  return points.sort((a, b) => a.x - b.x);
+  const sorted =
+    points.length > 1 ? [...points].sort((a, b) => a.x - b.x) : points;
+  const maxPoints = input.maxPoints ?? MAX_LINE_POINTS;
+  const { items, total } = downsamplePoints(normalizePointSizes(sorted), maxPoints);
+  return { points: items, total };
 }
 
 export function buildCategoryData(input: {
@@ -451,6 +641,19 @@ export function canRenderChart(input: {
     if (!col) return { ok: false, message: "Histogram: Numeric 컬럼을 지정하세요." };
     if (!yColumnIsPlottable(col, input.rows)) {
       return { ok: false, message: "Histogram: 숫자로 해석 가능한 컬럼이 필요합니다." };
+    }
+    return { ok: true, message: "" };
+  }
+
+  if (input.graphType === "pareto") {
+    const col = xCol ?? yCol;
+    if (!col) return { ok: false, message: "Pareto: Category 컬럼(X)을 지정하세요." };
+    return { ok: true, message: "" };
+  }
+
+  if (input.graphType === "heatmap") {
+    if (!xCol || !yCol) {
+      return { ok: false, message: "Heatmap: X와 Y Category 컬럼을 지정하세요." };
     }
     return { ok: true, message: "" };
   }

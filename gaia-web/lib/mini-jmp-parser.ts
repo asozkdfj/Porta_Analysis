@@ -32,9 +32,36 @@ const DATETIME_NAME_HINTS =
 const NUMERIC_NAME_HINTS =
   /^(testtime|test_time|elapsed|duration|uph|run\s*index|index|count|errcode)/i;
 
+const BOOLEAN_VALUES = new Set([
+  "true",
+  "false",
+  "pass",
+  "fail",
+  "ok",
+  "ng",
+  "yes",
+  "no",
+  "y",
+  "n",
+  "1",
+  "0",
+]);
+
+function isBooleanLike(values: string[]): boolean {
+  const samples = values.filter((v) => v.trim()).slice(0, 200);
+  if (samples.length === 0) return false;
+  let hits = 0;
+  for (const v of samples) {
+    if (BOOLEAN_VALUES.has(v.trim().toLowerCase())) hits += 1;
+  }
+  return hits / samples.length >= 0.85;
+}
+
 function inferColumnKind(values: string[], columnName = ""): MiniJmpColumnKind {
   const samples = values.filter((v) => v.trim()).slice(0, 200);
   if (samples.length === 0) return "string";
+
+  if (isBooleanLike(samples)) return "boolean";
 
   let numericHits = 0;
   let dateHits = 0;
@@ -91,20 +118,18 @@ export function getXNumeric(
   return runIndex;
 }
 
-export function parseMiniJmpCsv(text: string, fileName: string): MiniJmpDataset {
-  const parsed = Papa.parse<string[]>(text, { skipEmptyLines: true });
-  if (parsed.errors.length > 0) {
-    throw new Error(parsed.errors[0]?.message ?? "CSV 파싱 오류");
+export function buildDatasetFromMatrix(
+  rawRows: string[][],
+  fileName: string
+): MiniJmpDataset {
+  const rowsFiltered = rawRows.filter((r) => r.some((c) => c?.trim()));
+  if (rowsFiltered.length < 2) {
+    throw new Error("헤더와 데이터 행이 필요합니다.");
   }
 
-  const rawRows = parsed.data.filter((r) => r.some((c) => c?.trim()));
-  if (rawRows.length < 2) {
-    throw new Error("CSV에 헤더와 데이터 행이 필요합니다.");
-  }
-
-  const isGaia = detectGaiaFormat(rawRows);
-  const headerRow = rawRows[0].map((h) => h.trim());
-  const dataRows = isGaia ? rawRows.slice(4) : rawRows.slice(1);
+  const isGaia = detectGaiaFormat(rowsFiltered);
+  const headerRow = rowsFiltered[0].map((h) => h.trim());
+  const dataRows = isGaia ? rowsFiltered.slice(4) : rowsFiltered.slice(1);
 
   const rows: Record<string, string>[] = [];
   for (const rowArr of dataRows) {
@@ -120,19 +145,33 @@ export function parseMiniJmpCsv(text: string, fileName: string): MiniJmpDataset 
     throw new Error("유효한 데이터 행이 없습니다.");
   }
 
+  const totalRows = rows.length;
   const columns: MiniJmpColumn[] = headerRow.map((name, index) => {
     const values = rows.map((r) => r[name] ?? "");
     const nonEmpty = values.filter((v) => v.trim());
+    const unique = new Set(nonEmpty);
     return {
       name,
       kind: inferColumnKind(values, name),
       index,
       nonEmptyCount: nonEmpty.length,
+      missingCount: totalRows - nonEmpty.length,
+      uniqueCount: unique.size,
       sampleValues: nonEmpty.slice(0, 3),
     };
   });
 
   return { fileName, headers: headerRow, columns, rows };
+}
+
+export function parseMiniJmpCsv(text: string, fileName: string): MiniJmpDataset {
+  const parsed = Papa.parse<string[]>(text, { skipEmptyLines: true });
+  if (parsed.errors.length > 0) {
+    throw new Error(parsed.errors[0]?.message ?? "CSV 파싱 오류");
+  }
+
+  const rawRows = parsed.data.filter((r) => r.some((c) => c?.trim()));
+  return buildDatasetFromMatrix(rawRows, fileName);
 }
 
 export function columnByName(

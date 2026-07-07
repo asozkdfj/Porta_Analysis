@@ -22,3 +22,25 @@ export async function exportMiniJmpChartPng(
   URL.revokeObjectURL(url);
   return fileName;
 }
+
+export function exportFilteredCsv(
+  rows: Record<string, string>[],
+  headers: string[],
+  fileName: string
+): void {
+  const escape = (v: string) => {
+    if (/[",\n]/.test(v)) return `"${v.replace(/"/g, '""')}"`;
+    return v;
+  };
+  const lines = [
+    headers.map(escape).join(","),
+    ...rows.map((row) => headers.map((h) => escape(row[h] ?? "")).join(",")),
+  ];
+  const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = fileName.replace(/\.(csv|xlsx)$/i, "") + "_filtered.csv";
+  a.click();
+  URL.revokeObjectURL(url);
+}

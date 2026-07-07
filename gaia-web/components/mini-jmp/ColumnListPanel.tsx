@@ -1,6 +1,6 @@
 "use client";
 
-import { Hash, Calendar, Type } from "lucide-react";
+import { Hash, Calendar, Type, ToggleLeft } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { MiniJmpColumn, MiniJmpColumnKind } from "@/lib/mini-jmp-types";
 
@@ -18,12 +18,14 @@ interface ColumnListPanelProps {
 function kindIcon(kind: MiniJmpColumnKind) {
   if (kind === "numeric") return Hash;
   if (kind === "datetime") return Calendar;
+  if (kind === "boolean") return ToggleLeft;
   return Type;
 }
 
 function kindLabel(kind: MiniJmpColumnKind) {
   if (kind === "numeric") return "Number";
   if (kind === "datetime") return "DateTime";
+  if (kind === "boolean") return "Boolean";
   return "Text";
 }
 
@@ -85,7 +87,15 @@ export function ColumnListPanel({
                       {col.name}
                     </div>
                     <div className="text-[10px] text-slate-500">
-                      [{kindLabel(col.kind)}] · {col.nonEmptyCount.toLocaleString()}
+                      [{kindLabel(col.kind)}] · n={col.nonEmptyCount.toLocaleString()}
+                      {col.missingCount > 0 && (
+                        <span className="text-amber-500/80">
+                          {" "}
+                          · miss {col.missingCount.toLocaleString()}
+                        </span>
+                      )}
+                      {" "}
+                      · uniq {col.uniqueCount.toLocaleString()}
                     </div>
                   </div>
                 </div>

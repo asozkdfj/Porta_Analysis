@@ -2,14 +2,21 @@
 
 import { cn } from "@/lib/utils";
 
+export interface PreviewRow {
+  row: Record<string, string>;
+  sourceIndex: number;
+}
+
 interface DataPreviewTableProps {
   headers: string[];
-  rows: Record<string, string>[];
+  rows: PreviewRow[];
   search: string;
   onSearchChange: (v: string) => void;
   xColumn: string | null;
   yColumn: string | null;
   totalRows: number;
+  selectedRowIndex: number | null;
+  onRowSelect: (sourceIndex: number | null) => void;
 }
 
 export function DataPreviewTable({
@@ -20,6 +27,8 @@ export function DataPreviewTable({
   xColumn,
   yColumn,
   totalRows,
+  selectedRowIndex,
+  onRowSelect,
 }: DataPreviewTableProps) {
   return (
     <div className="rounded-lg border border-slate-700 bg-slate-900">
@@ -30,6 +39,11 @@ export function DataPreviewTable({
         <div className="flex items-center gap-2">
           <span className="text-[10px] text-slate-500">
             {rows.length} / {totalRows.toLocaleString()} rows
+            {selectedRowIndex != null && (
+              <span className="text-amber-400 ml-1">
+                · selected #{selectedRowIndex + 1}
+              </span>
+            )}
           </span>
           <input
             type="search"
@@ -44,6 +58,9 @@ export function DataPreviewTable({
         <table className="w-full text-[10px] border-collapse">
           <thead className="sticky top-0 bg-slate-800 z-10">
             <tr>
+              <th className="text-left py-1.5 px-2 font-medium border-b border-slate-700 text-slate-500 w-10">
+                #
+              </th>
               {headers.map((h) => (
                 <th
                   key={h}
@@ -63,15 +80,31 @@ export function DataPreviewTable({
             {rows.length === 0 ? (
               <tr>
                 <td
-                  colSpan={headers.length}
+                  colSpan={headers.length + 1}
                   className="py-8 text-center text-slate-500"
                 >
                   No rows
                 </td>
               </tr>
             ) : (
-              rows.map((row, i) => (
-                <tr key={i} className="border-b border-slate-800 hover:bg-slate-800/50">
+              rows.map(({ row, sourceIndex }) => (
+                <tr
+                  key={sourceIndex}
+                  onClick={() =>
+                    onRowSelect(
+                      selectedRowIndex === sourceIndex ? null : sourceIndex
+                    )
+                  }
+                  className={cn(
+                    "border-b border-slate-800 cursor-pointer",
+                    selectedRowIndex === sourceIndex
+                      ? "bg-amber-950/50 ring-1 ring-inset ring-amber-600/60"
+                      : "hover:bg-slate-800/50"
+                  )}
+                >
+                  <td className="py-1 px-2 text-slate-500 tabular-nums">
+                    {sourceIndex + 1}
+                  </td>
                   {headers.map((h) => (
                     <td
                       key={h}

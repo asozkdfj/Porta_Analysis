@@ -6,13 +6,15 @@ import { AppNav } from "@/components/layout/AppNav";
 import { FilePickButton } from "@/components/controls/FilePickButton";
 import { ColumnListPanel } from "@/components/mini-jmp/ColumnListPanel";
 import { DataPreviewTable } from "@/components/mini-jmp/DataPreviewTable";
+import { DistributionPanel } from "@/components/mini-jmp/DistributionPanel";
+import { FitYByXPanel } from "@/components/mini-jmp/FitYByXPanel";
 import { DropZonePanel } from "@/components/mini-jmp/DropZonePanel";
 import { GraphBuilderCanvas } from "@/components/mini-jmp/GraphBuilderCanvas";
 import { GraphToolbar } from "@/components/mini-jmp/GraphToolbar";
 import { OptionPanel } from "@/components/mini-jmp/OptionPanel";
 import { SummaryStatsPanel } from "@/components/mini-jmp/SummaryStatsPanel";
 import { useMiniJmp } from "@/hooks/useMiniJmp";
-import { exportMiniJmpChartPng } from "@/lib/mini-jmp-export";
+import { exportMiniJmpChartPng, exportFilteredCsv } from "@/lib/mini-jmp-export";
 
 export function MiniJmpShell() {
   const chartRef = useRef<HTMLDivElement>(null);
@@ -22,8 +24,13 @@ export function MiniJmpShell() {
   const jmp = useMiniJmp();
 
   const handleFile = async (file: File) => {
-    const text = await file.text();
-    jmp.loadCsvText(text, file.name);
+    await jmp.loadFile(file);
+  };
+
+  const handleSaveConfig = () => {
+    const name = window.prompt("저장할 View 이름", "My View");
+    if (!name?.trim()) return;
+    jmp.saveCurrentConfig(name.trim());
   };
 
   const handleExport = async () => {
@@ -58,10 +65,11 @@ export function MiniJmpShell() {
               <FilePickButton
                 variant="secondary"
                 className="bg-slate-800 border-slate-600 text-slate-100 hover:bg-slate-700"
+                accept=".csv,.xlsx,.xls,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 onPick={handleFile}
               >
                 <Upload className="h-4 w-4" />
-                CSV Upload
+                Upload CSV / Excel
               </FilePickButton>
               {jmp.dataset && (
                 <span className="self-center text-xs font-mono text-slate-400">
@@ -83,14 +91,14 @@ export function MiniJmpShell() {
 
         {!jmp.dataset ? (
           <div className="rounded-lg border-2 border-dashed border-slate-700 bg-slate-900/50 py-24 text-center">
-            <p className="text-lg text-slate-300">CSV 파일을 업로드하세요</p>
+            <p className="text-lg text-slate-300">CSV 또는 Excel 파일을 업로드하세요</p>
             <p className="text-sm text-slate-500 mt-2">
               첫 번째 행을 Header로 인식합니다 · TestTime, StartTime, TesterID 등
             </p>
             <div className="mt-6">
-              <FilePickButton onPick={handleFile}>
+              <FilePickButton accept=".csv,.xlsx,.xls" onPick={handleFile}>
                 <Upload className="h-4 w-4" />
-                CSV Upload
+                Upload CSV / Excel
               </FilePickButton>
             </div>
           </div>
@@ -101,6 +109,21 @@ export function MiniJmpShell() {
               onGraphTypeChange={jmp.setGraphType}
               onSwapXY={jmp.swapXY}
               canSwapXY={Boolean(jmp.xColumn || jmp.yColumn)}
+              onUndo={jmp.undo}
+              canUndo={jmp.canUndo}
+              onReset={jmp.resetGraph}
+              presets={jmp.presets}
+              onApplyPreset={jmp.applyPreset}
+              onSaveConfig={handleSaveConfig}
+              onImportConfig={jmp.importConfigFromFile}
+              onExportCsv={() => {
+                if (!jmp.dataset) return;
+                exportFilteredCsv(
+                  jmp.filteredRows,
+                  jmp.dataset.headers,
+                  jmp.dataset.fileName
+                );
+              }}
               onExport={() => void handleExport()}
               exportBusy={exportBusy}
               canExport={jmp.renderState.ok}
@@ -142,9 +165,15 @@ export function MiniJmpShell() {
                     renderMessage={jmp.renderState.message}
                     graphType={jmp.graphType}
                     options={jmp.options}
+                    axisConfig={jmp.axisConfig}
+                    onAxisSettingsChange={jmp.setAxisSettings}
                     xColumn={jmp.xColumn}
                     yColumn={jmp.yColumn}
                     colorColumn={jmp.colorColumn}
+                    groupColumn={jmp.groupColumn}
+                    labelColumn={jmp.labelColumn}
+                    selectedRowIndex={jmp.selectedRowIndex}
+                    onRowSelect={jmp.setSelectedRowIndex}
                   />
                 </div>
               </div>
@@ -173,10 +202,32 @@ export function MiniJmpShell() {
               />
             </div>
 
-            <SummaryStatsPanel
-              column={jmp.yColumn ?? jmp.xColumn}
-              stats={jmp.summaryStats}
+            <FitYByXPanel
+              xLabel={jmp.xColumn ?? "X"}
+              yLabel={jmp.yColumn ?? "Y"}
+              stats={jmp.fitStats}
+              visible={
+                jmp.graphType === "scatter" &&
+                jmp.chartModel != null &&
+                "mode" in jmp.chartModel &&
+                jmp.chartModel.mode === "numeric"
+              }
             />
+
+            <div className="grid gap-4 lg:grid-cols-2">
+              <SummaryStatsPanel
+                column={jmp.yColumn ?? jmp.xColumn}
+                stats={jmp.summaryStats}
+              />
+              <DistributionPanel
+                columns={jmp.dataset.columns}
+                column={jmp.distributionColumn}
+                onColumnChange={jmp.setDistributionColumn}
+                numericStats={jmp.distributionStats}
+                categoryFreq={jmp.distributionFreq}
+                isNumeric={jmp.distributionIsNumeric}
+              />
+            </div>
 
             <DataPreviewTable
               headers={jmp.dataset.headers}
@@ -185,7 +236,9 @@ export function MiniJmpShell() {
               onSearchChange={jmp.setPreviewSearch}
               xColumn={jmp.xColumn}
               yColumn={jmp.yColumn}
-              totalRows={jmp.dataset.rows.length}
+              totalRows={jmp.filteredRows.length}
+              selectedRowIndex={jmp.selectedRowIndex}
+              onRowSelect={jmp.setSelectedRowIndex}
             />
           </>
         )}
