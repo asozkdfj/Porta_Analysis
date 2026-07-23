@@ -62,7 +62,10 @@ export function disambiguateLogEntriesSequential(
 
   const result: TactTimeLogEntry[] = [];
   for (const cycle of cycles) {
-    result.push(...disambiguateSingleCycleSequential(cycle, marker));
+    const cycleResult = disambiguateSingleCycleSequential(cycle, marker);
+    for (const entry of cycleResult) {
+      result.push(entry);
+    }
   }
   return result.sort((a, b) => a.rowIndex - b.rowIndex);
 }
@@ -162,7 +165,10 @@ export function disambiguateStation2LogEntries(
 
   const result: TactTimeLogEntry[] = [];
   for (const cycle of cycles) {
-    result.push(...disambiguateStation2SingleCycle(cycle, marker));
+    const cycleResult = disambiguateStation2SingleCycle(cycle, marker);
+    for (const entry of cycleResult) {
+      result.push(entry);
+    }
   }
   return result.sort((a, b) => a.rowIndex - b.rowIndex);
 }
